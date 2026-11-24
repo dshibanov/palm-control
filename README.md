@@ -35,7 +35,7 @@ are drawn on the video; tune with `--click-drop` (default 0.2, lower = more sens
 
 | Action | Gesture |
 |---|---|
-| Cursor | right-hand index knuckle |
+| Cursor | right-hand index fingertip (changeable in the lab) |
 | Select / press buttons | index-finger tap |
 | Command (move / mine / help build) | middle-finger tap |
 | Box select | pinch thumb+index, move, release |
@@ -51,7 +51,7 @@ Switch modes live with `Tab` or in the **Params** panel (top-right button, or `P
 
 | Mode | What you tune |
 |---|---|
-| `cursor` | `C` calibrate (explanation, then two corners with a 2 s settle before each capture), `T` accuracy test, `[ ]` and `- =` smoothing; Params: which hand point the cursor follows |
+| `cursor` | `C` calibrate (explanation, then two corners with a 2 s settle before each capture), `T` accuracy test; bottom-right plot of raw vs. filtered cursor x; Params: which hand point the cursor follows, and the smoothing filter (none / ema / oneeuro / kalman) with its params |
 | `click` | live graph of the index/middle finger signal, tap counters, `- =` or Params buttons for tap sensitivity (drop); pinch is shown because taps are ignored while pinching |
 
 New controls (map pan, pinch, ...) are a class in `lab_modes.py` registered in `MODES`.

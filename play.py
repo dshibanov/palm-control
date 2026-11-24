@@ -1,7 +1,7 @@
 """Palm RTS: a tiny WC3-style game controlled by hand gestures.
 
 Hand mode (default)                      Mouse mode (--mouse, for testing the game)
-  right hand knuckle  = cursor             mouse = cursor
+  right hand index tip = cursor            mouse = cursor
   index tap           = select / click     left click / left drag = select / box select
   middle tap          = command            right click = command
   pinch + move + open = box select
