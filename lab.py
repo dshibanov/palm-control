@@ -4,6 +4,8 @@
   uv run lab.py -m click    tune tap detection (index = select, middle = command)
 
 Switch modes live with Tab or in the Params panel (top-right button, or P).
+Cursor mode: Params has a "tracking point" tab and a "smoothing filter" tab (filter presets: add, remove,
+turn on/off; the ones that are on are drawn on the plot at the bottom right; closing Params saves them).
 Common keys: S save (per hand, calibration.json)   R reset the mode's defaults   Q / Esc quit.
 White ring = filtered cursor (what the game uses). Red dot = raw, unfiltered.
 Preview (bottom-left): camera with the active region (yellow) and the tracked point.
@@ -21,7 +23,7 @@ from hand_input import HandInput
 from lab_modes import GREY, H, MODES, W
 
 BTN = pygame.Rect(W - 112, 8, 100, 30)
-PANEL = pygame.Rect(W - 392, 46, 380, 640)
+PANEL = pygame.Rect(W - 472, 46, 460, 364)  # stays above the bottom plot/preview row
 TAB_H = 28
 
 
@@ -33,12 +35,26 @@ class Lab:
         self.hi = HandInput(camera=args.camera, hand=args.hand).start()
         self.modes = {name: cls(self) for name, cls in MODES.items()}
         self.mode = self.modes[args.mode]
-        self.panel_open = False
+        self._panel_open = False
         self.hist: deque = deque(maxlen=45)  # recent cursor px, for jitter
         self.now = time.monotonic()
         self.snap = self.hand = self.cur = self.raw = None
         self.events: list = []
         self.msg, self.msg_until = "", 0.0
+
+    @property
+    def panel_open(self):
+        return self._panel_open
+
+    @panel_open.setter
+    def panel_open(self, v):
+        if self._panel_open and not v:  # closing Params saves the filter presets
+            self.hi_autosave()
+        self._panel_open = v
+
+    def hi_autosave(self):
+        calibration.update(self.args.hand, filter_presets=self.hi.presets, filter_driver=self.hi.driver)
+        self.say("filter presets saved", 1.5)
 
     def say(self, text, secs=2.0):
         self.msg, self.msg_until = text, time.monotonic() + secs
@@ -50,8 +66,8 @@ class Lab:
 
     def save(self):
         hi = self.hi
-        calibration.save({"region": list(hi.region), "min_cutoff": hi.min_cutoff, "beta": hi.beta,
-                          "anchor": hi.anchor, "click_drop": hi.click_drop}, self.args.hand)
+        calibration.save({"region": list(hi.region), "anchor": hi.anchor, "click_drop": hi.click_drop,
+                          "filter_presets": hi.presets, "filter_driver": hi.driver}, self.args.hand)
         self.say(f"saved {self.args.hand}-hand settings")
 
     # ---- input
@@ -186,6 +202,7 @@ def main():
         lab.update()
         lab.draw(screen)
         pygame.display.flip()
+    lab.panel_open = False  # saves presets if Params was open
     lab.hi.stop()
     pygame.quit()
 
