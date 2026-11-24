@@ -3,3 +3,4 @@ __pycache__/
 models/*.task
 gestures.json
 calibration.json
+tracks/

@@ -18,6 +18,7 @@ import numpy as np
 import pygame
 
 import calibration
+import tracks
 from calibration import CalibrationFlow
 from motion import FILTER_INFO, FILTERS, click_signal, default_params, make_filter
 
@@ -70,18 +71,16 @@ class Mode:
 # --------------------------------------------------------------------------- cursor
 class CursorMode(Mode):
     title = "cursor"
-    help = "C calibrate  T test  S save  R reset  Tab mode"
+    help = "C calibrate  T circle task (records raw track)  S save  R reset  Tab mode"
     panel_title = "Cursor"
     ROW0, ROW_H, COL_W = 76, 22, 226  # landmark list: 2 columns
     MARGIN_PX = (66, 58)  # target inset matches region_from_corners default margin (0.06, 0.08)
-    DWELL_S, TARGET_R = 0.4, 42
 
     def __init__(self, lab):
         super().__init__(lab)
         self.phase = "free"  # free | calib | test
         self.flow = CalibrationFlow()
-        self.target, self.target_t0, self.dwell0 = None, 0.0, None
-        self.times: list[float] = []
+        self.task, self.task_lms, self.saved = None, None, None
         self.filt = FilterPanel(lab)
         self.sub = "point"  # Params panel tab: point | filter
 
@@ -89,9 +88,16 @@ class CursorMode(Mode):
     def locked(self):
         return self.phase == "calib"
 
-    def _new_target(self):
-        self.target = (random.randint(80, W - 80), random.randint(80, H - 80))
-        self.target_t0, self.dwell0 = time.monotonic(), None
+    def _start_task(self):
+        self.task, self.task_lms = tracks.TrackTask(size=(W, H)), None
+        self.lab.panel_open = False
+
+    def _finish_task(self):
+        lab, t = self.lab, self.task
+        path = tracks.save(t.to_dict(lab.args.hand, lab.hi.anchor, lab.hi.region, lab.hi.driver))
+        self.saved = path
+        tracks.plot_and_open_async(path)
+        lab.say(f"done! saved {path.name}, opening plot", 5)
 
     def on_key(self, k):
         lab = self.lab
@@ -101,9 +107,12 @@ class CursorMode(Mode):
         elif k == pygame.K_SPACE and self.phase == "calib" and self.flow.phase == "intro":
             self.flow.start(lab.now)
         elif k == pygame.K_t:
-            self.phase = "free" if self.phase == "test" else "test"
-            self.times.clear()
-            self._new_target()
+            if self.phase == "test":
+                self.phase, self.task = "free", None
+                lab.say("circle task cancelled (nothing saved)")
+            elif self.phase == "free":
+                self.phase = "test"
+                self._start_task()
 
     def reset(self):
         d, hi = calibration.DEFAULT, self.lab.hi
@@ -118,27 +127,30 @@ class CursorMode(Mode):
             if region:
                 lab.hi.region = region
                 self.phase = "free"
-                lab.say("calibrated! press S to save, T to test accuracy", 4)
-        if self.phase == "test" and self.target and lab.cur:
-            if np.hypot(lab.cur[0] - self.target[0], lab.cur[1] - self.target[1]) < self.TARGET_R:
-                self.dwell0 = self.dwell0 or lab.now
-                if lab.now - self.dwell0 >= self.DWELL_S:
-                    self.times.append(lab.now - self.target_t0 - self.DWELL_S)
-                    self._new_target()
-            else:
-                self.dwell0 = None
+                lab.say("calibrated! press S to save, T for the circle task", 4)
+        if self.phase == "test" and self.task:
+            if not hand:
+                self.task.lost_hand()
+            elif hand.lms is not self.task_lms:  # one record per new camera frame
+                self.task_lms = hand.lms
+                if self.task.step(lab.now, lab.cur, hand.point, lab.hi.map_cursor(*hand.point), lab.raw):
+                    self.phase = "free"
+                    self._finish_task()
 
     def draw_under(self, screen):
         self.filt.draw_plot(screen)
         self.filt.draw_markers(screen)
         if self.phase == "calib" and self.flow.phase != "intro":
             self._draw_calibration(screen)
-        if self.phase == "test" and self.target:
-            r = self.TARGET_R
-            pygame.draw.circle(screen, (90, 160, 255), self.target, r, 3)
-            if self.dwell0:
-                pygame.draw.arc(screen, GREEN, (self.target[0] - r, self.target[1] - r, r * 2, r * 2),
-                                0, 6.283 * min((self.lab.now - self.dwell0) / self.DWELL_S, 1), 6)
+        if self.phase == "test" and self.task and self.task.target:
+            t = self.task
+            r, (tx, ty) = t.radius, t.target
+            pygame.draw.circle(screen, (90, 160, 255), (tx, ty), r, 3)
+            num = self.lab.big.render(str(t.idx + 1), True, (90, 160, 255))
+            screen.blit(num, (tx - num.get_width() // 2, ty - num.get_height() // 2))
+            p = t.progress(self.lab.now)
+            if p > 0:
+                pygame.draw.arc(screen, GREEN, (tx - r, ty - r, r * 2, r * 2), 0, 6.283 * p, 6)
 
     def draw_over(self, screen):
         if self.phase == "calib" and self.flow.phase == "intro":
@@ -151,8 +163,10 @@ class CursorMode(Mode):
         out = [f"tracking: {NAMES[hi.anchor]}   state: {self.phase}",
                f"{self.filt.summary()}   jitter(1s std) {jit:5.1f}px",
                "region " + " ".join(f"{v:.2f}" for v in hi.region)]
-        if self.times:
-            out.append(f"test: {len(self.times)} hits, mean {np.mean(self.times):.2f}s, last {self.times[-1]:.2f}s")
+        if self.phase == "test" and self.task:
+            out.append(f"circle task: {self.task.idx}/{self.task.n} done, {len(self.task.rows)} raw samples recorded (T cancels)")
+        elif self.saved:
+            out.append(f"last track: {self.saved.name}")
         return out
 
     # ---- Params panel: pick the tracked landmark

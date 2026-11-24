@@ -214,3 +214,23 @@ def test_filter_presets_roundtrip_and_validation(tmp_path, monkeypatch):
     assert len(cal["filter_presets"]) == 1 and cal["filter_driver"] == 0   # bogus dropped, driver clamped
     assert cal["filter_presets"][0]["on"] is True                          # driver is always plotted
     assert cal["filter_presets"][0]["params"]["alpha"] == 0.1
+
+
+def test_track_task_completes_and_plots(tmp_path):
+    import tracks
+    task = tracks.TrackTask(n=3)
+    assert task.circles == tracks.TrackTask(n=3).circles  # fixed layout
+    t = 0.0
+    while not task.finished and t < 60:
+        tx, ty = task.target
+        t += 0.033
+        task.step(t, (tx, ty), (0.5, 0.5), (0.5, 0.5), (tx + 3, ty))
+    assert task.finished and len(task.reached) == 3 and task.reached[0] >= 1.0
+    d = task.to_dict("Left", 8, (0.2, 0.15, 0.8, 0.75), 0)
+    path = tracks.save(d, tmp_path)
+    png = tracks.plot(tracks.load(path), tmp_path / "t.png")
+    assert png.stat().st_size > 5000
+    task2 = tracks.TrackTask(n=2)
+    task2.step(0.0, (task2.target[0], task2.target[1]), (0, 0), (0, 0), (0, 0))
+    task2.step(0.5, (0, 0), (0, 0), (0, 0), (0, 0))   # leaving the circle resets the dwell
+    assert task2.dwell0 is None
