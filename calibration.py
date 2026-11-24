@@ -5,25 +5,65 @@ from pathlib import Path
 
 import numpy as np
 
+from motion import FILTERS, default_params
+
 PATH = Path(__file__).parent / "calibration.json"
-DEFAULT = {"region": [0.2, 0.15, 0.8, 0.75], "min_cutoff": 1.5, "beta": 10.0, "anchor": 5,  # anchor = landmark index
-           "click_drop": 0.2}  # finger dip needed for a tap (lower = more sensitive)
+MAX_PRESETS = 6
+
+
+def default_presets() -> list[dict]:
+    """Filter presets (filter type + params + whether it is plotted). The driver preset moves the cursor."""
+    return [{"filter": f, "params": default_params(f), "on": f == "oneeuro"} for f in ("oneeuro", "ema", "kalman")]
+
+
+DEFAULT = {"region": [0.2, 0.15, 0.8, 0.75], "anchor": 8,  # anchor = landmark index (8 = index fingertip)
+           "click_drop": 0.2,  # finger dip needed for a tap (lower = more sensitive)
+           "filter_driver": 0}  # index in "filter_presets" of the preset that drives the cursor
 
 
 def _read() -> dict:
     return json.loads(PATH.read_text()) if PATH.exists() else {}
 
 
+def _clean_presets(raw) -> list[dict]:
+    out = []
+    for p in raw or []:
+        if isinstance(p, dict) and p.get("filter") in FILTERS:
+            out.append({"filter": p["filter"], "params": {**default_params(p["filter"]), **p.get("params", {})},
+                        "on": bool(p.get("on", True))})
+    return out[:MAX_PRESETS] or default_presets()
+
+
 def load(hand: str = "Right") -> dict:
     """Calibration for one hand ("Left"/"Right"); falls back to defaults."""
     cal = dict(DEFAULT)
-    cal.update(_read().get(hand, {}))
+    saved = dict(_read().get(hand, {}))
+    # old files: one cursor filter ("filter" + "filter_params", or One Euro min_cutoff/beta at top level)
+    legacy = {k: saved.pop(k) for k in ("min_cutoff", "beta") if k in saved}
+    old_name, old_params = saved.pop("filter", None), saved.pop("filter_params", {})
+    cal.update(saved)
+    cal["filter_presets"] = _clean_presets(saved.get("filter_presets"))
+    if "filter_presets" not in saved and (legacy or old_name):
+        name = old_name if old_name in FILTERS else "oneeuro"
+        for i, p in enumerate(cal["filter_presets"]):
+            if p["filter"] == name:
+                p["params"].update(legacy if name == "oneeuro" else {}, **old_params.get(name, {}))
+                p["on"], cal["filter_driver"] = True, i
+    cal["filter_driver"] = min(max(int(cal["filter_driver"]), 0), len(cal["filter_presets"]) - 1)
+    cal["filter_presets"][cal["filter_driver"]]["on"] = True
     return cal
 
 
 def save(cal: dict, hand: str = "Right"):
     data = _read()
     data[hand] = cal
+    PATH.write_text(json.dumps(data, indent=2))
+
+
+def update(hand: str, **fields):
+    """Change only some saved fields for a hand (e.g. filter presets), keeping the rest."""
+    data = _read()
+    data.setdefault(hand, {}).update(fields)
     PATH.write_text(json.dumps(data, indent=2))
 
 

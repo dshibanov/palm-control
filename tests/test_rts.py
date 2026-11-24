@@ -178,6 +178,39 @@ def test_calibration_flow_retries_when_shaky_and_restarts_when_hand_lost():
 def test_calibration_anchor_default_and_per_hand(tmp_path, monkeypatch):
     import calibration
     monkeypatch.setattr(calibration, "PATH", tmp_path / "c.json")
-    assert calibration.load("Left")["anchor"] == 5
-    calibration.save({"region": [0, 0, 1, 1], "min_cutoff": 1.0, "beta": 1.0, "anchor": 8}, "Left")
-    assert calibration.load("Left")["anchor"] == 8 and calibration.load("Right")["anchor"] == 5
+    assert calibration.load("Left")["anchor"] == 8
+    calibration.save({"region": [0, 0, 1, 1], "anchor": 5}, "Left")
+    assert calibration.load("Left")["anchor"] == 5 and calibration.load("Right")["anchor"] == 8
+
+
+def test_filters_converge_and_smooth(tmp_path, monkeypatch):
+    from motion import FILTERS, make_filter
+    rng = np.random.default_rng(1)
+    for name in FILTERS:
+        f = make_filter(name)
+        out = [f(np.array([0.5, 0.5]) + rng.normal(0, 0.01, 2), i / 30) for i in range(120)]
+        assert np.allclose(out[-1], 0.5, atol=0.03), name
+        if name != "none":
+            assert np.std([o[0] for o in out[60:]]) < 0.01, name
+
+
+def test_legacy_calibration_migrates(tmp_path, monkeypatch):
+    import json, calibration
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"Left": {"region": [0, 0, 1, 1], "min_cutoff": 3.0, "beta": 5.0}}))
+    monkeypatch.setattr(calibration, "PATH", p)
+    cal = calibration.load("Left")
+    drv = cal["filter_presets"][cal["filter_driver"]]
+    assert drv["filter"] == "oneeuro" and drv["params"]["min_cutoff"] == 3.0 and drv["on"]
+
+
+def test_filter_presets_roundtrip_and_validation(tmp_path, monkeypatch):
+    import calibration
+    monkeypatch.setattr(calibration, "PATH", tmp_path / "c.json")
+    assert [p["filter"] for p in calibration.load("Right")["filter_presets"]] == ["oneeuro", "ema", "kalman"]
+    presets = [{"filter": "ema", "params": {"alpha": 0.1}, "on": False}, {"filter": "bogus", "params": {}, "on": True}]
+    calibration.update("Right", filter_presets=presets, filter_driver=5)
+    cal = calibration.load("Right")
+    assert len(cal["filter_presets"]) == 1 and cal["filter_driver"] == 0   # bogus dropped, driver clamped
+    assert cal["filter_presets"][0]["on"] is True                          # driver is always plotted
+    assert cal["filter_presets"][0]["params"]["alpha"] == 0.1

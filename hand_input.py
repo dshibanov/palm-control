@@ -3,9 +3,8 @@
 Produces, per detected hand: filtered cursor, pinch state, built-in/custom gesture.
 And an event queue: click, rclick, pinch_down, pinch_up, gesture.
 
-Cursor follows one landmark (`anchor`, default 5 = index *knuckle*; changeable in the cursor lab).
-The knuckle is the default because the fingertip moves when you tap. The cursor is also
-frozen while a tap is in progress.
+Cursor follows one landmark (`anchor`, default 8 = index *fingertip*; changeable in the cursor lab).
+A fingertip moves when you tap, so the cursor is frozen while a tap is in progress.
 """
 
 import threading
@@ -21,7 +20,7 @@ from mediapipe.tasks.python import BaseOptions, vision
 
 import calibration
 from gestures import GestureStore
-from motion import ClickDetector, OneEuro, PinchDetector
+from motion import ClickDetector, PinchDetector, make_filter
 
 MODEL = Path(__file__).parent / "models" / "gesture_recognizer.task"
 CONNECTIONS = [(c.start, c.end) for c in vision.HandLandmarksConnections.HAND_CONNECTIONS]
@@ -53,13 +52,13 @@ class _Track:
         self.click = ClickDetector(drop=drop)
         self.rclick = ClickDetector(drop=drop, finger="middle")
         self.pinch = PinchDetector()
-        self.filt = OneEuro()
+        self.filt, self.fver = None, -1  # cursor filter, rebuilt when HandInput.fver changes
         self.cursor = (0.5, 0.5)
         self.pinch_changed = -1e9
         self.cand, self.cand_n, self.stable = None, 0, None
 
     def reset(self):
-        self.click.reset(); self.rclick.reset(); self.filt.reset()
+        self.click.reset(); self.rclick.reset(); self.filt and self.filt.reset()
         self.cand, self.cand_n, self.stable = None, 0, None
 
 
@@ -68,7 +67,8 @@ class HandInput:
                  stable_frames=5, min_score=0.6, hand="Right"):
         cal = calibration.load(hand)
         self.region = tuple(region or cal["region"])
-        self.min_cutoff, self.beta, self.anchor = cal["min_cutoff"], cal["beta"], cal["anchor"]
+        self.anchor = cal["anchor"]
+        self.presets, self.driver, self.fver = cal["filter_presets"], cal["filter_driver"], 0
         self.camera = camera
         self.click_drop = cal["click_drop"] if click_drop is None else click_drop  # may be changed live
         self.width, self.height = width, height
@@ -103,6 +103,10 @@ class HandInput:
     def _emit(self, kind, hand, name=None):
         with self._lock:
             self._events.append(Event(kind, hand, name))
+
+    def presets_changed(self):
+        """Call after editing `presets` / `driver`: the cursor filter is rebuilt on the next frame."""
+        self.fver += 1
 
     def map_cursor(self, nx, ny):
         x0, y0, x1, y1 = self.region
@@ -174,7 +178,9 @@ class HandInput:
                 self._emit("rclick", label)
         # cursor (frozen during a tap)
         raw = self.map_cursor(arr[self.anchor, 0], arr[self.anchor, 1])
-        tr.filt.min_cutoff, tr.filt.beta = self.min_cutoff, self.beta
+        if tr.fver != self.fver:
+            p = self.presets[self.driver]
+            tr.filt, tr.fver = make_filter(p["filter"], p["params"]), self.fver
         if not (tr.click.busy(now) or tr.rclick.busy(now)):
             tr.cursor = tuple(tr.filt(raw, now))
         # stable built-in gesture -> event on change
