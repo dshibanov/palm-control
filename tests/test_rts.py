@@ -234,3 +234,26 @@ def test_track_task_completes_and_plots(tmp_path):
     task2.step(0.0, (task2.target[0], task2.target[1]), (0, 0), (0, 0), (0, 0))
     task2.step(0.5, (0, 0), (0, 0), (0, 0), (0, 0))   # leaving the circle resets the dwell
     assert task2.dwell0 is None
+
+
+def test_optimizer_pareto_and_budget(tmp_path):
+    import random
+    import optimize
+    import tracks
+    task = tracks.TrackTask(n=1)  # one circle: no jump for the filter to settle after
+    rng, t = random.Random(0), 0.0
+    while not task.finished and t < 60:
+        tx, ty = task.target
+        t += 0.05
+        nx, ny = rng.gauss(0, 6), rng.gauss(0, 6)  # noisy raw point sitting on the circle
+        raw = ((tx + nx) / 1099, (ty + ny) / 719)
+        task.step(t, (tx, ty), (0, 0), raw, (tx + nx, ty + ny))
+    tr = optimize.Track(task.to_dict("Left", 8, (0, 0, 1, 1), 0))
+    ev = optimize.Evaluator([tr])
+    lag0, jit0 = ev("none", {})
+    assert lag0 == 0 and jit0 > 0
+    lag, jit = ev("ema", {"alpha": 0.1})
+    assert jit < jit0 and lag > 0               # smoothing trades lag for steadiness
+    pts = optimize.explore(ev, "oneeuro", 40, random.Random(1))
+    front = optimize.pareto(pts)
+    assert all(a[2] <= b[2] and a[1] > b[1] for a, b in zip(front, front[1:]))
